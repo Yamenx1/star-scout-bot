@@ -292,7 +292,7 @@ async function buildContext(siteKey, last) {
   try { qEmb = await ollamaEmbed(last); }
   catch {
     // No embedding model (e.g. hosted without Ollama): keyword fallback
-    const words = last.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);
+    const words = last.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 3);
     const ranked = siteChunks.map((c) => {
       const t = c.content.toLowerCase();
       return { c, s: words.reduce((n, w) => n + (t.includes(w) ? 1 : 0), 0) };
@@ -341,9 +341,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && url === "/api/chat") {
     const { siteKey = "SITE_DEMO", messages = [], stream = false } = await readBody(req);
-    const last = messages[messages.length - 1]?.content ?? "";
+    let last = messages[messages.length - 1]?.content ?? "";
     const arabic = /[\u0600-\u06FF]/.test(last);
     const langNote = arabic ? " The user wrote in Arabic — reply in Arabic (keep player and club names in English)." : "";
+    // Arabic -> translate first so stats + search work on English, answer stays Arabic
+    if (arabic) {
+      try {
+        const t = await llmChat([{ role: "user", content: "Translate to English. Reply with ONLY the translation, nothing else: " + last }]);
+        if (t && t.trim()) last = t.trim().replace(/^["']|["']$/g, "");
+      } catch (e) { console.error("translate:", e.message); }
+    }
 
     // human handoff -> ticket flag (widget shows email form)
     if (/human|ticket|agent/i.test(last)) {
