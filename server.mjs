@@ -17,7 +17,7 @@ const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://localhost:11434";
 const CHAT_MODEL = process.env.OLLAMA_CHAT_MODEL || "llama3.2";
 const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text";
 const GROQ_KEY = process.env.GROQ_API_KEY || "";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 const PORT = process.env.PORT || 3000;
 
 const types = { ".js": "text/javascript", ".html": "text/html", ".json": "application/json", ".css": "text/css" };
@@ -155,6 +155,7 @@ async function ollamaEmbed(input) {
 
 async function groqChat(messages, onToken) {
   const body = { model: GROQ_MODEL, messages, stream: !!onToken };
+  if (/gpt-oss/.test(GROQ_MODEL)) body.reasoning_effort = "low"; // else replies come back empty
   const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_KEY}` },
