@@ -344,13 +344,30 @@ const server = http.createServer(async (req, res) => {
     let last = messages[messages.length - 1]?.content ?? "";
     const arabic = /[\u0600-\u06FF]/.test(last);
     const langNote = arabic ? " The user wrote in Arabic — reply in Arabic (keep player and club names in English)." : "";
-    // Arabic -> translate first so stats + search work on English, answer stays Arabic
-    if (arabic) {
-      try {
-        const t = await llmChat([{ role: "user", content: "Translate to English. Reply with ONLY the translation, nothing else: " + last }]);
-        if (t && t.trim()) last = t.trim().replace(/^["']|["']$/g, "");
-      } catch (e) { console.error("translate:", e.message); }
+    // Arabic: map to an English pipeline query (the small model mistranslates, so rules beat it)
+    const AR_CLUBS = {
+      "برشلونة": "Barcelona", "ريال مدريد": "Real Madrid", "تشيلسي": "Chelsea", "ليفربول": "Liverpool",
+      "أرسنال": "Arsenal", "السيتي": "Man City", "توتنهام": "Tottenham", "يونايتد": "Man United",
+      "أياكس": "Ajax", "باريس": "PSG", "بايرن": "Bayern", "دورتموند": "Dortmund", "إنتر": "Inter",
+      "ميلان": "Milan", "يوفنتوس": "Juventus", "بورتو": "Porto", "سبورتينغ": "Sporting", "بنفيكا": "Benfica",
+      "أتلتيكو": "Atletico", "ليفركوزن": "Leverkusen", "نابولي": "Napoli", "روما": "Roma", "إشبيلية": "Sevilla",
+      "مارسيليا": "Marseille", "موناكو": "Monaco", "ليل": "Lille", "ليون": "Lyon", "أستون فيلا": "Aston Villa",
+      "نيوكاسل": "Newcastle", "توتنهام": "Tottenham", "إيفرتون": "Everton",
+    };
+    function arabicToQuery(q) {
+      if (/أعلى|الأفضل|تقييم|تصنيف/.test(q)) return "highest rated";
+      if (/هداف|أهداف|سجل|الأكثر تسجيل/.test(q)) return "top scorer";
+      if (/تمرير|صناعة|أسيست|صانع اللعب/.test(q)) return "most assists";
+      if (/أصغر|سنا|عمرا|الأصغر/.test(q)) return "youngest";
+      if (/نقاط|معادلة|حساب|مقياس|كيف يتم/.test(q)) return "how is the score calculated";
+      for (const [ar, en] of Object.entries(AR_CLUBS)) if (q.includes(ar)) return en + " players";
+      const hit = typeof findPlayer === "function" ? findPlayer(q) : [];
+      if (hit.length) return "tell me about " + hit[0].Name;
+      return "highest rated";
     }
+    const AR_INTRO = "إليك الإجابة من قاعدة بيانات Future Stars:\n";
+    if (arabic) last = arabicToQuery(last);
+    const arabicPrefix = arabic ? AR_INTRO : "";
 
     // human handoff -> ticket flag (widget shows email form)
     if (/human|ticket|agent/i.test(last)) {
@@ -370,21 +387,22 @@ const server = http.createServer(async (req, res) => {
     // 1) exact stats (instant, no LLM) — via LLM when Arabic is needed
     let direct = null;
     try { direct = answerStats(siteKey, last); } catch (e) { console.error("stats:", e.message); }
-    if (direct && !arabic) {
+    if (direct) {
       const sug = buildSuggestions(direct, last);
+      const text = arabicPrefix + direct.reply;
       const db = loadDB();
-      db.conversations.push({ siteKey, messages: [...messages, { role: "assistant", content: direct.reply }], status: "open", at: Date.now() });
+      db.conversations.push({ siteKey, messages: [...messages, { role: "assistant", content: text }], status: "open", at: Date.now() });
       saveDB(db);
       const meta = { photo: direct.photo || undefined, photos: direct.photos?.length ? direct.photos : undefined, suggestions: sug };
       if (stream) {
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-        const parts = direct.reply.match(/[\s\S]{1,60}/g) || [direct.reply];
+        const parts = text.match(/[\s\S]{1,60}/g) || [text];
         for (const p of parts) sendNDJSON(res, { t: p });
         sendNDJSON(res, { done: true, ...meta });
         res.end();
       } else {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ reply: direct.reply, ...meta }));
+        res.end(JSON.stringify({ reply: text, ...meta }));
       }
       return;
     }
