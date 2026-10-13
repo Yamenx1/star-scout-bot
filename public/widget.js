@@ -105,6 +105,7 @@
     box.innerHTML = "";
     history.forEach((m) => {
       const d = document.createElement("div");
+      d.setAttribute("dir", "auto");
       Object.assign(d.style, {
         alignSelf: m.role === "user" ? "flex-end" : "flex-start",
         background: m.role === "user" ? COLOR : "#f4f4f5",

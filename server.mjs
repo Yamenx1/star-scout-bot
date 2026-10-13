@@ -344,25 +344,59 @@ const server = http.createServer(async (req, res) => {
     let last = messages[messages.length - 1]?.content ?? "";
     const arabic = /[\u0600-\u06FF]/.test(last);
     const langNote = arabic ? " The user wrote in Arabic — reply in Arabic (keep player and club names in English)." : "";
-    // Arabic: map to an English pipeline query (the small model mistranslates, so rules beat it)
+    // Arabic: map to an English pipeline query (the small model mistranslates, so rules beat it).
+    // All matching uses normalized spelling (bare alef, heh, yeh) so diacritics/hamzas never matter.
+    const normAr = (s) => String(s).replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/ى/g, "ي").replace(/[\u064B-\u0652\u0640]/g, "");
     const AR_CLUBS = {
-      "برشلونة": "Barcelona", "ريال مدريد": "Real Madrid", "تشيلسي": "Chelsea", "ليفربول": "Liverpool",
-      "أرسنال": "Arsenal", "السيتي": "Man City", "توتنهام": "Tottenham", "يونايتد": "Man United",
-      "أياكس": "Ajax", "باريس": "PSG", "بايرن": "Bayern", "دورتموند": "Dortmund", "إنتر": "Inter",
-      "ميلان": "Milan", "يوفنتوس": "Juventus", "بورتو": "Porto", "سبورتينغ": "Sporting", "بنفيكا": "Benfica",
-      "أتلتيكو": "Atletico", "ليفركوزن": "Leverkusen", "نابولي": "Napoli", "روما": "Roma", "إشبيلية": "Sevilla",
-      "مارسيليا": "Marseille", "موناكو": "Monaco", "ليل": "Lille", "ليون": "Lyon", "أستون فيلا": "Aston Villa",
-      "نيوكاسل": "Newcastle", "توتنهام": "Tottenham", "إيفرتون": "Everton",
+      "برشلونه": "Barcelona", "ريال مدريد": "Real Madrid", "تشيلسي": "Chelsea", "ليفربول": "Liverpool",
+      "ارسنال": "Arsenal", "السيتي": "Man City", "توتنهام": "Tottenham", "يونايتد": "Man United",
+      "اياكس": "Ajax", "باريس": "PSG", "بايرن": "Bayern", "دورتموند": "Dortmund", "انتر": "Inter",
+      "ميلان": "Milan", "يوفتوس": "Juventus", "بورتو": "Porto", "سبورتينغ": "Sporting", "بنفيكا": "Benfica",
+      "اتلتيكو": "Atletico", "ليفركوزن": "Leverkusen", "استون فيلا": "Aston Villa", "نيوكاسل": "Newcastle",
     };
+    // Arabic aliases for the most asked-about players (normalized spelling).
+    // Aged-out stars map to null on purpose (not in the 2026-27 database).
+    const AR_PLAYERS = {
+      "يامال": "Lamine Yamal", "لامين": "Lamine Yamal", "استيفاو": "Estevao Willian",
+      "غلوخ": "Oscar Gloukh", "غارناتشو": "Alejandro Garnacho", "دوي": "Desire Doue",
+      "نيفيز": "Joao Neves", "بن صغير": "Eliesse Ben Seghir", "زائير": "Warren Zaire-Emery",
+      "كاريتساس": "Konstantinos Karetsas", "ديوماندي": "Ousmane Diomande", "هاتو": "Jorrel Hato",
+      "فروهولت": "Victor Froholdt", "ماينو": "Kobbie Mainoo", "مينو": "Kobbie Mainoo",
+      "مبابي": "Ethan Mbappe", "اندريك": "Endrick", "غولر": "Arda Guler", "كوبارسي": "Pau Cubarsi",
+      "غافي": "Gavi", "برنال": "Marc Bernal", "سافينيو": "Savinho", "ريكو لويس": "Rico Lewis",
+      "اوريلي": "Nico OReilly", "غراي": "Archie Gray", "تل": "Mathys Tel",
+      "غونزالو": "Gonzalo Garcia", "ماستانتونو": "Franco Mastantuono", "يورو": "Leny Yoro",
+      "اوباندو": "Allen Obando", "نيب": "Rio Ngumoha", "نغوموها": "Rio Ngumoha",
+      "نيبان": "Sverre Nypan", "جاكيه": "Jeremy Jacquet", "بيريا": "Oscar Perea",
+      "موسيالا": null, "فيرتز": null, "بيلينغهام": null, "سيسكو": null, "تشافي": null,
+    };
+    function resolveArPlayer(fragment) {
+      const f = normAr(fragment);
+      for (const [ar, en] of Object.entries(AR_PLAYERS)) {
+        if (en && f.includes(ar)) return en;
+      }
+      const hit = typeof findPlayer === "function" ? findPlayer(fragment) : [];
+      return hit.length ? hit[0].Name : null;
+    }
     function arabicToQuery(q) {
-      if (/أعلى|الأفضل|تقييم|تصنيف/.test(q)) return "highest rated";
-      if (/هداف|أهداف|سجل|الأكثر تسجيل/.test(q)) return "top scorer";
-      if (/تمرير|صناعة|أسيست|صانع اللعب/.test(q)) return "most assists";
-      if (/أصغر|سنا|عمرا|الأصغر/.test(q)) return "youngest";
-      if (/نقاط|معادلة|حساب|مقياس|كيف يتم/.test(q)) return "how is the score calculated";
-      for (const [ar, en] of Object.entries(AR_CLUBS)) if (q.includes(ar)) return en + " players";
-      const hit = typeof findPlayer === "function" ? findPlayer(q) : [];
-      if (hit.length) return "tell me about " + hit[0].Name;
+      const nq = normAr(q);
+      if (/اعلي|الافضل|تقييم|تصنيف/.test(nq)) return "highest rated";
+      if (/هداف|اهداف|سجل|الاكثر تسجيل/.test(nq)) return "top scorer";
+      if (/تمرير|صناعه|اسيست|صانع اللعب/.test(nq)) return "most assists";
+      if (/اصغر|سنا|عمرا|الاصغر/.test(nq)) return "youngest";
+      if (/نقاط|معادله|حساب|مقياس|كيف يتم/.test(nq)) return "how is the score calculated";
+      if (/مدافع|دفاع|قلب دفاع|ظهير/.test(nq)) return "best defenders";
+      if (/وسط|خط الوسط|لاعب وسط/.test(nq)) return "best midfielders";
+      if (/مهاجم|هجوم|جناح|راس حربه/.test(nq)) return "best forwards";
+      if (/حارس|حراس|مرمي/.test(nq)) return "best goalkeepers";
+      const vsM = nq.match(/(?:قارن|مقارنه)\s+(.+?)\s+(?:ضد|مقابل|مع|او)\s+(.+)/);
+      if (vsM) {
+        const a = resolveArPlayer(vsM[1]), b = resolveArPlayer(vsM[2]);
+        if (a && b && a !== b) return a + " vs " + b;
+      }
+      for (const [ar, en] of Object.entries(AR_CLUBS)) if (nq.includes(ar)) return en + " players";
+      const p = resolveArPlayer(q);
+      if (p) return "tell me about " + p;
       return "highest rated";
     }
     const AR_INTRO = "إليك الإجابة من قاعدة بيانات Future Stars:\n";
