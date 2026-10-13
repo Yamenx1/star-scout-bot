@@ -72,7 +72,8 @@ function findPlayer(q) {
   return cands;
 }
 
-// Exact-match stats engine. Returns { reply, photo? } or null.
+// Exact-match stats engine. Returns { reply, photo?, photos?[] } or null.
+const topPhotos = (list) => list.slice(0, 3).map((p) => p.photo).filter(Boolean);
 function answerStats(siteKey, q) {
   if (siteKey !== "SITE_DEMO" || !FS_PLAYERS.length) return null;
   const s = q.toLowerCase();
@@ -85,7 +86,7 @@ function answerStats(siteKey, q) {
     const a = aList.find((p) => !bList.some((q) => q.Name === p.Name)) || aList[0];
     const b = (bList.find((p) => a && p.Name !== a.Name) || bList[0]);
     if (a && b && a.Name !== b.Name) {
-      return { reply: `Head to head:\n• ${card(a)}\n• ${card(b)}` };
+      return { reply: `Head to head:\n• ${card(a)}\n• ${card(b)}`, photos: [a.photo, b.photo].filter(Boolean) };
     }
   }
 
@@ -98,6 +99,8 @@ function answerStats(siteKey, q) {
     return {
       reply: `Top ${n} by Future Star Score:\n` + top.map((p, i) => fmtLine(p, i + 1)).join("\n"),
       photo: n === 1 ? top[0].photo : null,
+      photos: n > 1 ? topPhotos(top) : undefined,
+      top,
     };
   }
   // best by position group
@@ -105,22 +108,22 @@ function answerStats(siteKey, q) {
     if (new RegExp(`best ${word}s?|top ${word}s?`).test(s)) {
       const top = FS_PLAYERS.filter((p) => poss.includes(p.Position))
         .sort((a, b) => num(b.FutureStarScore) - num(a.FutureStarScore)).slice(0, 5);
-      if (top.length) return { reply: `Best ${word}s by Future Star Score:\n` + top.map((p, i) => fmtLine(p, i + 1)).join("\n"), photo: top[0].photo };
+      if (top.length) return { reply: `Best ${word}s by Future Star Score:\n` + top.map((p, i) => fmtLine(p, i + 1)).join("\n"), photo: top[0].photo, photos: topPhotos(top), top };
     }
   }
   // top scorer / most goals / most assists
   if (/top scorer|most goals|leading scorer|best finisher/.test(s)) {
     const top = [...FS_PLAYERS].sort((a, b) => num(b.Goals) - num(a.Goals) || num(b.FutureStarScore) - num(a.FutureStarScore)).slice(0, 5);
-    return { reply: `Most goals:\n` + top.map((p, i) => fmtLine(p, i + 1)).join("\n"), photo: top[0].photo };
+    return { reply: `Most goals:\n` + top.map((p, i) => fmtLine(p, i + 1)).join("\n"), photo: top[0].photo, photos: topPhotos(top), top };
   }
   if (/most assists|best playmaker|top assists/.test(s)) {
     const top = [...FS_PLAYERS].sort((a, b) => num(b.Assists) - num(a.Assists) || num(b.FutureStarScore) - num(a.FutureStarScore)).slice(0, 5);
-    return { reply: `Most assists:\n` + top.map((p, i) => fmtLine(p, i + 1)).join("\n"), photo: top[0].photo };
+    return { reply: `Most assists:\n` + top.map((p, i) => fmtLine(p, i + 1)).join("\n"), photo: top[0].photo, photos: topPhotos(top), top };
   }
   // youngest / oldest
   if (/youngest/.test(s)) {
     const top = [...FS_PLAYERS].sort((a, b) => num(a.Age) - num(b.Age) || num(b.FutureStarScore) - num(a.FutureStarScore)).slice(0, 5);
-    return { reply: `Youngest prospects:\n` + top.map((p, i) => `${i + 1}. ${p.Name} (${p.Club}) — age ${p.Age}, score ${p.FutureStarScore}`).join("\n") };
+    return { reply: `Youngest prospects:\n` + top.map((p, i) => `${i + 1}. ${p.Name} (${p.Club}) — age ${p.Age}, score ${p.FutureStarScore}`).join("\n"), photos: topPhotos(top), top };
   }
   // club filter: "who plays for X" / "X players" / "players at X"
   const clubM = s.match(/(?:plays? for|players? (?:at|of|from)|show (?:me )?)(.+)/) || s.match(/(.+?)\s+players?$/);
@@ -130,7 +133,7 @@ function answerStats(siteKey, q) {
       .sort((a, b) => num(b.FutureStarScore) - num(a.FutureStarScore));
     if (hit.length) {
       const shown = hit.slice(0, 8);
-      return { reply: `${hit[0].Club} prospects (${hit.length} tracked):\n` + shown.map((p, i) => fmtLine(p, i + 1)).join("\n") + (hit.length > 8 ? `\n…and ${hit.length - 8} more.` : "") };
+      return { reply: `${hit[0].Club} prospects (${hit.length} tracked):\n` + shown.map((p, i) => fmtLine(p, i + 1)).join("\n") + (hit.length > 8 ? `\n…and ${hit.length - 8} more.` : ""), photos: topPhotos(hit), top: hit.slice(0, 5) };
     }
   }
   // single player card (+ deep link the widget turns into a button)
@@ -138,9 +141,34 @@ function answerStats(siteKey, q) {
   if (found.length && /(who is|tell me|about|stats|stat|profile|score of|how good|age of)/.test(s)) {
     const siteBase = process.env.SITE_BASE || "https://futurestarsweb.vercel.app/webapp/";
     const link = siteBase + "?player=" + encodeURIComponent(found[0].Name);
-    return { reply: card(found[0]) + "\nFull file: " + link, photo: found[0].photo };
+    return { reply: card(found[0]) + "\nFull file: " + link, photo: found[0].photo, player: found[0] };
   }
   return null;
+}
+
+// Follow-up suggestions tailored to what was just answered.
+function buildSuggestions(direct, last) {
+  const out = [];
+  const push = (s) => { if (s && !out.includes(s) && out.length < 3) out.push(s); };
+  if (direct?.player) {
+    const p = direct.player;
+    push(`Best ${p.Position}s?`);
+    push(`${p.Club} prospects?`);
+    push("Top 5 prospects?");
+  } else if (direct?.top?.length) {
+    push(`Tell me about ${direct.top[0].Name}`);
+    if (direct.top[1]) push(`Compare ${direct.top[0].Name} vs ${direct.top[1].Name}`);
+    push("How is the score calculated?");
+  } else if (/score|formula|calculated|rating/i.test(last)) {
+    push("Top 5 prospects?");
+    push("Best midfielders?");
+    push("Youngest prospects?");
+  } else {
+    push("Top 5 prospects?");
+    push("Best teenagers?");
+    push("Top scorer?");
+  }
+  return out;
 }
 
 // ---------- LLM backends ----------
@@ -153,9 +181,18 @@ async function ollamaEmbed(input) {
   return (await r.json()).embeddings[0];
 }
 
-async function groqChat(messages, onToken) {
-  const body = { model: GROQ_MODEL, messages, stream: !!onToken };
-  if (/gpt-oss/.test(GROQ_MODEL)) body.reasoning_effort = "low"; // else replies come back empty
+const GROQ_BIG = process.env.GROQ_BIG_MODEL || "openai/gpt-oss-120b";
+
+// hard questions go to the big model, quick ones stay on the fast model
+function pickModel(last) {
+  if (/compar| vs\.? |versus|why|explain|analy|difference|rank|top \d+|best \d+|all |list|between/i.test(last) || last.length > 140) return GROQ_BIG;
+  return GROQ_MODEL;
+}
+
+async function groqChat(messages, onToken, model) {
+  const useModel = model || GROQ_MODEL;
+  const body = { model: useModel, messages, stream: !!onToken };
+  if (/gpt-oss/.test(useModel)) body.reasoning_effort = "low"; // else replies come back empty
   const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_KEY}` },
@@ -213,8 +250,8 @@ async function ollamaStreamChat(messages, onToken) {
   return out;
 }
 
-async function llmChat(messages, onToken) {
-  if (GROQ_KEY) return groqChat(messages, onToken);
+async function llmChat(messages, onToken, model) {
+  if (GROQ_KEY) return groqChat(messages, onToken, model);
   if (onToken) return ollamaStreamChat(messages, onToken);
   // non-stream ollama
   const r = await fetch(`${OLLAMA_BASE}/api/chat`, {
@@ -305,6 +342,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url === "/api/chat") {
     const { siteKey = "SITE_DEMO", messages = [], stream = false } = await readBody(req);
     const last = messages[messages.length - 1]?.content ?? "";
+    const arabic = /[\u0600-\u06FF]/.test(last);
+    const langNote = arabic ? " The user wrote in Arabic — reply in Arabic (keep player and club names in English)." : "";
 
     // human handoff -> ticket flag (widget shows email form)
     if (/human|ticket|agent/i.test(last)) {
@@ -321,51 +360,56 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 1) exact stats (instant, no LLM)
+    // 1) exact stats (instant, no LLM) — via LLM when Arabic is needed
     let direct = null;
     try { direct = answerStats(siteKey, last); } catch (e) { console.error("stats:", e.message); }
-    if (direct) {
+    if (direct && !arabic) {
+      const sug = buildSuggestions(direct, last);
       const db = loadDB();
       db.conversations.push({ siteKey, messages: [...messages, { role: "assistant", content: direct.reply }], status: "open", at: Date.now() });
       saveDB(db);
+      const meta = { photo: direct.photo || undefined, photos: direct.photos?.length ? direct.photos : undefined, suggestions: sug };
       if (stream) {
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-        // send in a few chunks so it still feels live
         const parts = direct.reply.match(/[\s\S]{1,60}/g) || [direct.reply];
         for (const p of parts) sendNDJSON(res, { t: p });
-        sendNDJSON(res, { done: true, photo: direct.photo || undefined });
+        sendNDJSON(res, { done: true, ...meta });
         res.end();
       } else {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ reply: direct.reply, photo: direct.photo || undefined }));
+        res.end(JSON.stringify({ reply: direct.reply, ...meta }));
       }
       return;
     }
 
-    // 2) RAG + LLM
+    // 2) RAG + LLM (also used to phrase stats answers in Arabic)
     try {
       const { context, db } = await buildContext(siteKey, last);
+      const extraFacts = direct ? `\nVerified facts (use these numbers exactly):\n${direct.reply}` : "";
       const system = context
-        ? `You are Star Scout, a football scouting assistant for Future Stars (U22 prospects, 2026-27 season). Answer ONLY from this site context. If unsure, offer to create a ticket.\nContext:\n${context}`
-        : `You are Star Scout, a helpful football scouting assistant for site ${siteKey}. No training content yet — answer generally and offer to create a ticket if unsure. Keep replies short.`;
+        ? `You are Star Scout, a sharp football scout for Future Stars (U22 prospects, 2026-27 season). Talk like a scout: short sentences, confident, no fluff, no filler intros. Answer ONLY from the site context below. Use markdown when it helps: a tight table for comparisons, bullets for lists. Keep it under 120 words unless asked for more. If the answer is not in the context, say so in one line and offer a ticket.${langNote}\nContext:\n${context}${extraFacts}`
+        : `You are Star Scout, a sharp football scouting assistant for site ${siteKey}. No training content yet — say so briefly and offer a ticket. Keep it under 60 words.${langNote}${extraFacts}`;
       const chatMsgs = [
         { role: "system", content: system },
         ...messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
       ];
+      const model = pickModel(last);
+      const sug = buildSuggestions(direct, last);
+      const meta = { photo: direct?.photo || undefined, photos: direct?.photos?.length ? direct.photos : undefined, suggestions: sug };
       if (stream) {
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
         let full = "";
-        const out = await llmChat(chatMsgs, (t) => { full += t; sendNDJSON(res, { t }); });
-        sendNDJSON(res, { done: true });
+        const out = await llmChat(chatMsgs, (t) => { full += t; sendNDJSON(res, { t }); }, model);
+        sendNDJSON(res, { done: true, ...meta });
         res.end();
         db.conversations.push({ siteKey, messages: [...messages, { role: "assistant", content: full || out }], status: "open", at: Date.now() });
         saveDB(db);
       } else {
-        const reply = await llmChat(chatMsgs);
+        const reply = await llmChat(chatMsgs, null, model);
         db.conversations.push({ siteKey, messages: [...messages, { role: "assistant", content: reply }], status: "open", at: Date.now() });
         saveDB(db);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ reply }));
+        res.end(JSON.stringify({ reply, ...meta }));
       }
     } catch (e) {
       console.error("chat error:", e.message);

@@ -59,19 +59,45 @@
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  // markdown-lite: escape HTML, then bold, lists, tables, links
   function appendRich(el, text) {
-    const parts = String(text).split(/(https?:\/\/[^\s)]+)/g);
-    parts.forEach((part, i) => {
-      if (i % 2 === 1) {
-        const a = document.createElement("a");
-        a.href = part; a.target = "_blank"; a.rel = "noopener";
-        a.textContent = "Open full file";
-        a.style.color = "inherit";
-        el.appendChild(a);
-      } else if (part) {
-        el.appendChild(document.createTextNode(part));
+    const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const inline = (s) => {
+      let h = esc(s).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      const parts = h.split(/(https?:\/\/[^\s)<]+)/g);
+      return parts.map((p, i) => (i % 2 === 1
+        ? '<a href="' + p + '" target="_blank" rel="noopener" style="color:inherit">Open full file</a>'
+        : p)).join("");
+    };
+    const lines = String(text).split("\n");
+    let html = "", inList = false, table = [];
+    const flushTable = () => {
+      if (!table.length) return;
+      const rows = table.map((r) => r.split("|").map((c) => c.trim()).filter((c) => c && !/^-+$/.test(c)));
+      const head = rows[0] || [];
+      html += '<table style="border-collapse:collapse;margin:6px 0;font-size:12px;width:100%"><thead><tr>' +
+        head.map((c) => '<th style="border-bottom:1px solid #ccc;text-align:left;padding:3px 6px 3px 0">' + inline(c) + "</th>").join("") +
+        "</tr></thead><tbody>" +
+        rows.slice(1).map((r) => "<tr>" + r.map((c) => '<td style="border-bottom:1px solid #eee;padding:3px 6px 3px 0">' + inline(c) + "</td>").join("") + "</tr>").join("") +
+        "</tbody></table>";
+      table = [];
+    };
+    lines.forEach((ln) => {
+      const t = ln.trim();
+      if (/^\|.*\|$/.test(t)) { if (inList) { html += "</ul>"; inList = false; } table.push(t); return; }
+      flushTable();
+      const li = t.match(/^(?:[-*•]|\d+[.)])\s+(.*)/);
+      if (li) {
+        if (!inList) { html += '<ul style="margin:4px 0;padding-left:18px">'; inList = true; }
+        html += "<li>" + inline(li[1]) + "</li>";
+      } else {
+        if (inList) { html += "</ul>"; inList = false; }
+        if (t) html += "<div>" + inline(ln) + "</div>";
       }
     });
+    flushTable();
+    if (inList) html += "</ul>";
+    el.innerHTML = html;
   }
 
   function render() {
@@ -85,14 +111,49 @@
         color: m.role === "user" ? "#fff" : "#111",
         padding: "8px 12px", borderRadius: "12px", maxWidth: "85%", overflowWrap: "anywhere"
       });
-      if (m.photo) {
-        const img = document.createElement("img");
-        img.src = m.photo; img.alt = ""; img.loading = "lazy";
-        Object.assign(img.style, { width: "100%", borderRadius: "8px", marginBottom: m.content ? "6px" : "0", display: "block" });
-        d.appendChild(img);
+      if (m.content) {
+        const body = document.createElement("div");
+        appendRich(body, m.content);
+        d.appendChild(body);
+      } else if (!m.photo && !(m.photos && m.photos.length)) {
+        d.appendChild(document.createTextNode("…"));
       }
-      if (m.content) appendRich(d, m.content);
-      else if (!m.photo) d.appendChild(document.createTextNode("…"));
+      const shots = [];
+      if (m.photo) shots.push(m.photo);
+      (m.photos || []).forEach((p) => { if (p && !shots.includes(p)) shots.push(p); });
+      if (shots.length === 1 && !m.content) {
+        const img = document.createElement("img");
+        img.src = shots[0]; img.alt = ""; img.loading = "lazy";
+        Object.assign(img.style, { width: "100%", borderRadius: "8px", display: "block" });
+        d.appendChild(img);
+      } else if (shots.length) {
+        const row = document.createElement("div");
+        Object.assign(row.style, { display: "flex", gap: "6px", marginTop: m.content ? "6px" : "0" });
+        shots.slice(0, 3).forEach((src) => {
+          const img = document.createElement("img");
+          img.src = src; img.alt = ""; img.loading = "lazy";
+          Object.assign(img.style, { width: "64px", height: "80px", objectFit: "cover", objectPosition: "top center", borderRadius: "8px", display: "block", background: "#e4e4e7" });
+          row.appendChild(img);
+        });
+        d.appendChild(row);
+      }
+      // per-answer follow-ups (latest assistant message only)
+      const isLastAssistant = m.role === "assistant" && history[history.length - 1] === m;
+      if (isLastAssistant && m.suggestions && m.suggestions.length) {
+        const sug = document.createElement("div");
+        Object.assign(sug.style, { display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" });
+        m.suggestions.forEach((q) => {
+          const b = document.createElement("button");
+          b.type = "button"; b.textContent = q;
+          Object.assign(b.style, {
+            border: "1px solid " + COLOR, color: COLOR, background: "#fff",
+            borderRadius: "999px", padding: "3px 9px", fontSize: "11px", cursor: "pointer"
+          });
+          b.onclick = () => send(q);
+          sug.appendChild(b);
+        });
+        d.appendChild(sug);
+      }
       box.appendChild(d);
       m._el = d;
     });
@@ -167,6 +228,8 @@
     const finalize = (reply, extra) => {
       pending.content = reply || "Sorry, no reply.";
       if (extra?.photo) pending.photo = extra.photo;
+      if (extra?.photos?.length) pending.photos = extra.photos;
+      if (extra?.suggestions?.length) pending.suggestions = extra.suggestions;
       render();
       if (extra?.ticket) showEmailForm();
     };
@@ -199,7 +262,10 @@
       }
       render();
       if (meta?.ticket) showEmailForm();
-      if (meta?.photo) { pending.photo = meta.photo; render(); }
+      if (meta?.photo) pending.photo = meta.photo;
+      if (meta?.photos?.length) pending.photos = meta.photos;
+      if (meta?.suggestions?.length) pending.suggestions = meta.suggestions;
+      if (meta?.photo || meta?.photos || meta?.suggestions) render();
       if (!pending.content) throw new Error("empty stream");
     } catch {
       try {
