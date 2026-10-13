@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: star-scout-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.mjs
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false # paste a free key from https://console.groq.com/keys
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
